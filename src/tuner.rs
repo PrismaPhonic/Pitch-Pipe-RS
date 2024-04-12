@@ -2,7 +2,7 @@ use one_euro_rs::OneEuroFilter;
 
 use crate::{
     calibrator::TuningSettings,
-    table::{B_DIM, FC_DIM, J_DIM},
+    table::{B_DIM, FC_DIM, J_DIM, SIXTYHZ},
 };
 
 pub struct Grid {
@@ -105,20 +105,23 @@ pub struct Tuner {
     filter: OneEuroFilter<f64>,
     settings: TuningSettings,
     current_filtered_val: f64,
+    grid: Grid,
 }
 
 impl Tuner {
     pub fn new(settings: TuningSettings) -> Self {
         Self {
-            filter: OneEuroFilter::new(settings.sample_rate, 1.0, 1.0, 1.0),
+            filter: OneEuroFilter::new(60.0, 1.0, 1.0, 1.0),
             settings,
             current_filtered_val: 0.0,
+            grid: Grid::new(SIXTYHZ),
         }
     }
 
     // TODO: Add support to handle ringing (Might require a different one euro filter library that
-    // can expose alpha).
-    pub fn lag_s(&mut self) -> f64 {
+    // can expose alpha, or we could try porting over the one euro filter design from the js
+    // library.
+    pub fn lag_s(&mut self, target_precision: f64) -> f64 {
         let mut cnt = 0;
 
         // Warm at zero
@@ -133,9 +136,71 @@ impl Tuner {
 
             let delta = (self.current_filtered_val - self.settings.max_amplitude).abs();
 
-            if delta < self.settings.max_target_precision {
+            if delta < target_precision {
                 return cnt as f64 / self.settings.sample_rate;
             }
         }
     }
+
+    pub fn tune(&mut self) -> Option<FinalTuningSettings> {
+        let noise_stddev = self.settings.noise_variance.sqrt();
+        let mut best_precision = f64::MAX;
+        let mut best_lag_s = f64::MAX;
+        let mut best_min_cutoff_hz = None;
+        let mut best_beta = 1.1;
+
+        let mut target_precision = self.settings.max_target_precision;
+
+        while best_precision == f64::MAX {
+            for min_hz in (10..400).map(|x| x as f64 / 100.0) {
+                self.filter.configuration.cutoff_min = min_hz;
+
+                let mut beta = 1.0;
+                for scale in 1..=5 {
+                    let step = 10f64.powi(-scale) / 4.0;
+
+                    for _ in 0..36 {
+                        beta -= step;
+                        beta = (beta * 1e6).round() / 1e6;
+
+                        let precision = self.grid.precision(noise_stddev, min_hz, beta);
+
+                        if precision > target_precision {
+                            continue;
+                        }
+
+                        self.filter.configuration.beta = beta;
+
+                        let lag_s = self.lag_s(target_precision);
+
+                        let accept = if best_lag_s <= self.settings.max_lag_secs {
+                            !(lag_s >= self.settings.max_lag_secs || precision > best_precision)
+                        } else {
+                            lag_s <= best_lag_s
+                        };
+
+                        if !accept {
+                            continue;
+                        }
+
+                        best_precision = precision;
+                        best_lag_s = lag_s;
+                        best_beta = beta;
+                        best_min_cutoff_hz = Some(min_hz);
+                    }
+                }
+            }
+            target_precision += 1.0 / 3.0; // Adjust target precision and try again if no configuration is good enough
+        }
+
+        best_min_cutoff_hz.map(|min_cutoff_hz| FinalTuningSettings {
+            min_cutoff_hz,
+            beta: best_beta,
+        })
+    }
+}
+
+pub struct FinalTuningSettings {
+    pub min_cutoff_hz: f64,
+    pub beta: f64,
 }
