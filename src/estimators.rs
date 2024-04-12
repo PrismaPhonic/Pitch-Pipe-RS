@@ -237,7 +237,6 @@ impl<const N: usize> NoiseEstimator<N> {
 /// allocates a circular ring buffer at compile time so we can stack allocate the ring buffer.
 ///
 /// It maps to frequency because each ring buffer has 1 seconds worth of samples.
-#[derive(Default)]
 pub struct ThreeAxisNoiseEstimator<const N: usize> {
     // TODO: See if we can have these not be in Vecs. Right now they are heap allocated which kind
     // of defeats the point of the circular buffers being stack allocated.
@@ -258,7 +257,7 @@ pub struct ThreeAxisNoiseEstimator<const N: usize> {
 }
 
 impl<const N: usize> ThreeAxisNoiseEstimator<N> {
-    pub fn new() -> Self {
+    pub fn new(threshold: f64) -> Self {
         let mut x = vec![];
         let mut y = vec![];
         let mut z = vec![];
@@ -277,7 +276,7 @@ impl<const N: usize> ThreeAxisNoiseEstimator<N> {
             z,
             stats: RunningStatistics::default(),
 
-            threshold: 0.1,
+            threshold,
         }
     }
 
@@ -325,17 +324,11 @@ pub struct SixtyHzThreeAxisNoiseEstimator {
     z: [NoiseEstimator<60>; 20],
     stats: RunningStatistics,
 
-    // Used to determine wen the 95% confidence interval determines that we are within the given
+    // Used to determine when the 95% confidence interval determines that we are within the given
     // threshold of the mean.
     //
     // 0.1 is the typical default value.
     threshold: f64,
-}
-
-impl Default for SixtyHzThreeAxisNoiseEstimator {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl SixtyHzThreeAxisNoiseEstimator {
@@ -365,14 +358,14 @@ impl SixtyHzThreeAxisNoiseEstimator {
         ]
     }
 
-    pub fn new() -> Self {
+    pub fn new(threshold: f64) -> Self {
         Self {
             x: Self::noise_estimators(),
             y: Self::noise_estimators(),
             z: Self::noise_estimators(),
             stats: RunningStatistics::default(),
 
-            threshold: 0.1,
+            threshold,
         }
     }
 
@@ -401,5 +394,11 @@ impl SixtyHzThreeAxisNoiseEstimator {
 
         let ratio = (2.0 * self.stats.ci95) / self.stats.mean;
         ratio < self.threshold
+    }
+
+    // Returns white noise variance estimates which is the mean of our
+    // PSD estimates.
+    pub fn mean_variance(&self) -> f64 {
+        self.stats.mean
     }
 }
