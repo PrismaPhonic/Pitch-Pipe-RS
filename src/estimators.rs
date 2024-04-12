@@ -1,3 +1,6 @@
+use circular_buffer::CircularBuffer;
+use num::{complex::ComplexFloat, pow::Pow, Complex};
+
 /// Can be used to aggregate variance data, using the Welford algorithm:
 /// https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance
 ///
@@ -84,5 +87,115 @@ impl MaxDistanceEstimator {
     /// that.
     pub fn max_within_reason(&self) -> f64 {
         *self.speeds.iter().min_by(|a, b| a.total_cmp(b)).unwrap()
+    }
+}
+
+/// Estimates power spectral density on the monitor_hz frequency
+/// in order to estimate Gaussian white noise variance in
+/// an input device signal. When using, ensure the user is
+/// idle. Slow movements are fine, but jerks and abrupt
+/// stops may inflate the estimate.
+///
+/// Note 1, sample_hz / 2 is the Nyquist frequency, the highest
+/// frequency we can monitor. To simply things, let monitor_hz
+/// represent a countdown offset from the Nyquist frequency in
+/// 0, 1, 2, etc.
+///
+/// Note 2, for illustrative purposes, this object is written to
+/// monitor one frequency, but can easily be rewritten to
+/// efficiently monitor multiple frequencies.
+pub struct NoiseEstimator<const N: usize> {
+    // Sample frequency as an integer. Should be an integer and ideally an even number.
+    sample_hz: u64,
+    // To efficiently allocate an internal circular buffer on the stack
+    // we make the construction of the NoiseEstimator take a generic
+    // of the circular buffer size. This is usually the number of samples in one second.
+    samples: CircularBuffer<N, Complex<f64>>,
+    power: f64,
+    count: u64,
+
+    x0: Complex<f64>,
+    x1: Complex<f64>,
+    x2: Complex<f64>,
+
+    w0: Complex<f64>,
+    w1: Complex<f64>,
+    w2: Complex<f64>,
+
+    w: f64,
+}
+
+impl<const N: usize> NoiseEstimator<N> {
+    pub fn new(monitor_hz: u16) -> Self {
+        use std::f64::consts::PI;
+
+        let monitor_hz = (N / 2) - monitor_hz as usize;
+
+        // A buffer to store one seconds worth of samples
+        let mut samples = CircularBuffer::<N, Complex<f64>>::new();
+        samples.fill(Complex::new(0.0, 0.0));
+
+        // x1 represents the frequency we want to monitor, but
+        // for a Hanning window, we need its neighbors as well.
+        let x0 = Complex::new(0.0, 0.0);
+        let x1 = Complex::new(0.0, 0.0);
+        let x2 = Complex::new(0.0, 0.0);
+
+        let w0 = Complex::new(0.0, -2.0 * PI * (monitor_hz as f64 - 1.0) / N as f64).exp();
+        let w1 = Complex::new(0.0, -2.0 * PI * monitor_hz as f64 / N as f64).exp();
+        let w2 = Complex::new(0.0, -2.0 * PI * (monitor_hz as f64 + 1.0) / N as f64).exp();
+
+        let mut w = 0.0;
+
+        for hz in 0..N {
+            let tmp = 2.0 * PI * hz as f64 / (N as f64 - 1.0);
+            let win = 0.5 - 0.5 * tmp.cos();
+            w += win.pow(2);
+        }
+
+        Self {
+            sample_hz: N as u64,
+            samples,
+            power: 0.0,
+            count: 0,
+            x0,
+            x1,
+            x2,
+            w0,
+            w1,
+            w2,
+            w,
+        }
+    }
+
+    pub fn update(&mut self, sample: f64) {
+        let sample = Complex::new(sample, 0.0);
+
+        self.x0 = self.w0 * (self.x0 + sample - unsafe { self.samples.get(0).unwrap_unchecked() });
+        self.x1 = self.w1 * (self.x1 + sample - unsafe { self.samples.get(0).unwrap_unchecked() });
+        self.x2 = self.w2 * (self.x2 + sample - unsafe { self.samples.get(0).unwrap_unchecked() });
+
+        self.samples.push_back(sample);
+        self.count += 1;
+
+        if self.count >= self.sample_hz {
+            let tmp = (Complex::new(0.5, 0.0) * self.x1)
+                - (Complex::new(0.25, 0.0) * self.x0)
+                - (Complex::new(0.25, 0.0) * self.x2);
+
+            self.power += tmp.abs().pow(2);
+        }
+    }
+
+    pub fn variance(&self) -> f64 {
+        // If we haven't gone through one round of the circular buffer, then we can't determine
+        // variance yet.
+        if self.count <= self.sample_hz {
+            return 0.0;
+        }
+
+        let n = self.count - self.sample_hz;
+
+        self.power / (n as f64 * self.w)
     }
 }
