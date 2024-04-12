@@ -1,4 +1,9 @@
-use crate::table::{B_DIM, FC_DIM, J_DIM};
+use one_euro_rs::OneEuroFilter;
+
+use crate::{
+    calibrator::TuningSettings,
+    table::{B_DIM, FC_DIM, J_DIM},
+};
 
 pub struct Grid {
     table: [[[f64; B_DIM]; FC_DIM]; J_DIM],
@@ -93,5 +98,44 @@ impl Grid {
         let b_idx_hi = beta.ceil();
 
         [beta, b_idx_lo, b_idx_hi]
+    }
+}
+
+pub struct Tuner {
+    filter: OneEuroFilter<f64>,
+    settings: TuningSettings,
+    current_filtered_val: f64,
+}
+
+impl Tuner {
+    pub fn new(settings: TuningSettings) -> Self {
+        Self {
+            filter: OneEuroFilter::new(settings.sample_rate, 1.0, 1.0, 1.0),
+            settings,
+            current_filtered_val: 0.0,
+        }
+    }
+
+    // TODO: Add support to handle ringing (Might require a different one euro filter library that
+    // can expose alpha).
+    pub fn lag_s(&mut self) -> f64 {
+        let mut cnt = 0;
+
+        // Warm at zero
+        for _ in 0..2 {
+            self.current_filtered_val = self.filter.filter(0.0);
+        }
+
+        loop {
+            self.current_filtered_val = self.filter.filter(self.settings.max_amplitude);
+
+            cnt += 1;
+
+            let delta = (self.current_filtered_val - self.settings.max_amplitude).abs();
+
+            if delta < self.settings.max_target_precision {
+                return cnt as f64 / self.settings.sample_rate;
+            }
+        }
     }
 }
