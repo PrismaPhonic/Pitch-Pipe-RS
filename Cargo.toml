@@ -8,3 +8,5 @@ edition = "2021"
 [dependencies]
 circular-buffer = "0.1.7"
 num = "0.4.1"
+one-euro = "0.6.0"
+nalgebra = { version = "0.32.1", default-features = false, features = ["std"] }
