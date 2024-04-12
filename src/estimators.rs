@@ -42,8 +42,9 @@ impl RunningStatistics {
     }
 }
 
+#[derive(Default)]
 pub struct MaxDistanceEstimator {
-    previous: f64,
+    previous: Option<f64>,
     // From the JS codebase:
     // This is used to track the top speeds. We will take the minimum top speed, assuming others
     // are outliers due to noise or system tracking errors.
@@ -54,30 +55,31 @@ pub struct MaxDistanceEstimator {
 }
 
 impl MaxDistanceEstimator {
-    pub fn new(first_sample: f64) -> Self {
+    pub fn new() -> Self {
         Self {
-            previous: first_sample,
+            previous: None,
             speeds: [0.0; 5],
         }
     }
 
     pub fn update(&mut self, sample: f64, stddev: f64) {
-        let delta = (self.previous - sample).abs();
+        if let Some(previous) = self.previous {
+            let delta = (previous - sample).abs();
 
-        if delta > (3.0 * stddev) {
-            // Unwrap is safe - the array will never be empty.
-            let min = self
-                .speeds
-                .iter_mut()
-                .min_by(|a, b| a.total_cmp(b))
-                .unwrap();
+            if delta > (3.0 * stddev) {
+                // Unwrap is safe - the array will never be empty.
+                let min = self
+                    .speeds
+                    .iter_mut()
+                    .min_by(|a, b| a.total_cmp(b))
+                    .unwrap();
 
-            if delta > *min {
-                *min = delta;
+                if delta > *min {
+                    *min = delta;
+                }
             }
         }
-
-        self.previous = sample;
+        self.previous = Some(sample);
     }
 
     /// Renaming this to max_within_reason. The JS codebase this was ported from calls this
@@ -87,6 +89,37 @@ impl MaxDistanceEstimator {
     /// that.
     pub fn max_within_reason(&self) -> f64 {
         *self.speeds.iter().min_by(|a, b| a.total_cmp(b)).unwrap()
+    }
+}
+
+pub struct ThreeAxisMaxDistanceEstimator {
+    noise_std_dev: f64,
+    x: MaxDistanceEstimator,
+    y: MaxDistanceEstimator,
+    z: MaxDistanceEstimator,
+}
+
+impl ThreeAxisMaxDistanceEstimator {
+    pub fn new(noise_std_dev: f64) -> Self {
+        Self {
+            noise_std_dev,
+            x: MaxDistanceEstimator::new(),
+            y: MaxDistanceEstimator::new(),
+            z: MaxDistanceEstimator::new(),
+        }
+    }
+
+    pub fn update(&mut self, x: f64, y: f64, z: f64) {
+        self.x.update(x, self.noise_std_dev);
+        self.y.update(y, self.noise_std_dev);
+        self.z.update(z, self.noise_std_dev);
+    }
+
+    pub fn max_within_reason(&self) -> f64 {
+        self.x
+            .max_within_reason()
+            .max(self.y.max_within_reason())
+            .max(self.z.max_within_reason())
     }
 }
 
@@ -126,10 +159,10 @@ pub struct NoiseEstimator<const N: usize> {
 }
 
 impl<const N: usize> NoiseEstimator<N> {
-    pub fn new(monitor_hz: u16) -> Self {
+    pub fn new(monitor_hz: usize) -> Self {
         use std::f64::consts::PI;
 
-        let monitor_hz = (N / 2) - monitor_hz as usize;
+        let monitor_hz = (N / 2) - monitor_hz;
 
         // A buffer to store one seconds worth of samples
         let mut samples = CircularBuffer::<N, Complex<f64>>::new();
@@ -187,15 +220,186 @@ impl<const N: usize> NoiseEstimator<N> {
         }
     }
 
-    pub fn variance(&self) -> f64 {
+    pub fn variance(&self) -> Option<f64> {
         // If we haven't gone through one round of the circular buffer, then we can't determine
         // variance yet.
         if self.count <= self.sample_hz {
-            return 0.0;
+            return None;
         }
 
         let n = self.count - self.sample_hz;
 
-        self.power / (n as f64 * self.w)
+        Some(self.power / (n as f64 * self.w))
+    }
+}
+
+/// Estimates noise in signal across three axis. N in this case should be the frequency and
+/// allocates a circular ring buffer at compile time so we can stack allocate the ring buffer.
+///
+/// It maps to frequency because each ring buffer has 1 seconds worth of samples.
+#[derive(Default)]
+pub struct ThreeAxisNoiseEstimator<const N: usize> {
+    // TODO: See if we can have these not be in Vecs. Right now they are heap allocated which kind
+    // of defeats the point of the circular buffers being stack allocated.
+    //
+    // Consider turning on generic_const_exprs and depending on nightly.
+    // We could also require it as one more generic and leverage the caller passing the value in,
+    // but this seems really clunky.
+    x: Vec<NoiseEstimator<N>>,
+    y: Vec<NoiseEstimator<N>>,
+    z: Vec<NoiseEstimator<N>>,
+    stats: RunningStatistics,
+
+    // Used to determine wen the 95% confidence interval determines that we are within the given
+    // threshold of the mean.
+    //
+    // 0.1 is the typical default value.
+    threshold: f64,
+}
+
+impl<const N: usize> ThreeAxisNoiseEstimator<N> {
+    pub fn new() -> Self {
+        let mut x = vec![];
+        let mut y = vec![];
+        let mut z = vec![];
+
+        let freq_cnt = N / 2 - 10;
+
+        for monitor_hz in 0..freq_cnt {
+            x.push(NoiseEstimator::new(monitor_hz));
+            y.push(NoiseEstimator::new(monitor_hz));
+            z.push(NoiseEstimator::new(monitor_hz));
+        }
+
+        Self {
+            x,
+            y,
+            z,
+            stats: RunningStatistics::default(),
+
+            threshold: 0.1,
+        }
+    }
+
+    // Update estimate with new samples. Note - we assume noise is homogeneous across all axis.
+    //
+    // Returns true once the 95% CI width is within a given threshold of the mean.
+    pub fn update(&mut self, x: f64, y: f64, z: f64) -> bool {
+        for i in 0..self.x.len() {
+            self.x[i].update(x);
+            self.y[i].update(y);
+            self.z[i].update(z);
+
+            let var_x = self.x[i].variance();
+            let var_y = self.y[i].variance();
+            let var_z = self.z[i].variance();
+
+            match (var_x, var_y, var_z) {
+                (Some(var_x), Some(var_y), Some(var_z)) => {
+                    self.stats.update(var_x);
+                    self.stats.update(var_y);
+                    self.stats.update(var_z);
+                }
+                _ => continue,
+            }
+        }
+
+        let ratio = (2.0 * self.stats.ci95) / self.stats.mean;
+        ratio < self.threshold
+    }
+
+    // Returns white noise variance estimates which is the mean of our
+    // PSD estimates.
+    pub fn mean_variance(&self) -> f64 {
+        self.stats.mean
+    }
+}
+
+// Similar to the noise estimator above for now, we need to use a multidimensional table from the
+// original JS database - I have no idea where this table came from or how to create one for
+// different frequencies, but it's a 60 hz table - so we might as well hard code for 60 hz anyways
+// for now.
+pub struct SixtyHzThreeAxisNoiseEstimator {
+    x: [NoiseEstimator<60>; 20],
+    y: [NoiseEstimator<60>; 20],
+    z: [NoiseEstimator<60>; 20],
+    stats: RunningStatistics,
+
+    // Used to determine wen the 95% confidence interval determines that we are within the given
+    // threshold of the mean.
+    //
+    // 0.1 is the typical default value.
+    threshold: f64,
+}
+
+impl Default for SixtyHzThreeAxisNoiseEstimator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SixtyHzThreeAxisNoiseEstimator {
+    // TODO: There *must* be a better way to do this.
+    fn noise_estimators() -> [NoiseEstimator<60>; 20] {
+        [
+            NoiseEstimator::new(0),
+            NoiseEstimator::new(1),
+            NoiseEstimator::new(2),
+            NoiseEstimator::new(3),
+            NoiseEstimator::new(4),
+            NoiseEstimator::new(5),
+            NoiseEstimator::new(6),
+            NoiseEstimator::new(7),
+            NoiseEstimator::new(8),
+            NoiseEstimator::new(9),
+            NoiseEstimator::new(10),
+            NoiseEstimator::new(11),
+            NoiseEstimator::new(12),
+            NoiseEstimator::new(13),
+            NoiseEstimator::new(14),
+            NoiseEstimator::new(15),
+            NoiseEstimator::new(16),
+            NoiseEstimator::new(17),
+            NoiseEstimator::new(18),
+            NoiseEstimator::new(19),
+        ]
+    }
+
+    pub fn new() -> Self {
+        Self {
+            x: Self::noise_estimators(),
+            y: Self::noise_estimators(),
+            z: Self::noise_estimators(),
+            stats: RunningStatistics::default(),
+
+            threshold: 0.1,
+        }
+    }
+
+    // Update estimate with new samples. Note - we assume noise is homogeneous across all axis.
+    //
+    // Returns true once the 95% CI width is within a given threshold of the mean.
+    pub fn update(&mut self, x: f64, y: f64, z: f64) -> bool {
+        for i in 0..20 {
+            self.x[i].update(x);
+            self.y[i].update(y);
+            self.z[i].update(z);
+
+            let var_x = self.x[i].variance();
+            let var_y = self.y[i].variance();
+            let var_z = self.z[i].variance();
+
+            match (var_x, var_y, var_z) {
+                (Some(var_x), Some(var_y), Some(var_z)) => {
+                    self.stats.update(var_x);
+                    self.stats.update(var_y);
+                    self.stats.update(var_z);
+                }
+                _ => continue,
+            }
+        }
+
+        let ratio = (2.0 * self.stats.ci95) / self.stats.mean;
+        ratio < self.threshold
     }
 }
