@@ -2,6 +2,10 @@
 [![MIT licensed](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![Released API docs](https://docs.rs/pitch-pipe/badge.svg)](https://docs.rs/pitch-pipe)
 
+# ** DO NOT USE THIS CRATE RIGHT NOW**
+
+After extensive testing, it seems that this does not meet the desired lag requirements set by the user AND over aggressively smooths data. I can only assume that either the 60 hz table from the parent repo is not appropriate for all 60 hz signals, or the study data was fabricated. Please don't waste as much time on this as I did. I will update this if I get it sorted. 
+
 # Pitch Pipe
 
 This is a rust port of Pitch Pipe. The original researchers who invented Pitch
