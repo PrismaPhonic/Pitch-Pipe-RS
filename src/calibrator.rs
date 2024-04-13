@@ -68,6 +68,10 @@ impl AmplitudeCalibrator {
     pub fn tuner(self, least_precision: f64, worst_lag_secs: f64) -> Tuner {
         Tuner::new(self.tuning_settings(least_precision, worst_lag_secs))
     }
+
+    pub fn tuner_with_defaults(self) -> Tuner {
+        Tuner::new(self.tuning_settings(3.0, 0.08))
+    }
 }
 
 pub struct TuningSettings {
