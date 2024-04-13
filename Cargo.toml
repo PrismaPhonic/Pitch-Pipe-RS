@@ -2,6 +2,22 @@
 name = "pitch-pipe"
 version = "0.1.0"
 edition = "2021"
+authors = ["Peter Farr <Peter@PrismaPhonic.com>"]
+description = "Pitch Pipe is a method for automatically tuning a one euro filter"
+keywords = ["filters", "signal-processing"]
+categories = ["computer-vision", "embedded", "mathematics", "aerospace"]
+repository = "https://github.com/PrismaPhonic/Pitch-Pipe-RS"
+documentation = "https://docs.rs/pitch-pipe"
+readme = "README.md"
+license = "MIT"
+include = [
+    "**/*.rs",
+    "Cargo.toml",
+    "README.md",
+]
+
+[badges]
+maintenance = { status = "actively-developed" }
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
