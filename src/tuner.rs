@@ -121,6 +121,10 @@ impl Tuner {
     // TODO: Add support to handle ringing (Might require a different one euro filter library that
     // can expose alpha, or we could try porting over the one euro filter design from the js
     // library.
+    //
+    // There is a bug in the parent JS library this is copied from though with an open ticket that
+    // I would like resolved before attempting to add support for ringing. As far as I can tell
+    // it's not correctly supported in the parent library.
     pub fn lag_s(&mut self, target_precision: f64) -> f64 {
         let mut cnt = 0;
 
@@ -190,7 +194,8 @@ impl Tuner {
                     }
                 }
             }
-            target_precision += 1.0 / 3.0; // Adjust target precision and try again if no configuration is good enough
+            // Adjust target precision and try again if no configuration is good enough
+            target_precision += 1.0 / 3.0;
         }
 
         best_min_cutoff_hz.map(|min_cutoff_hz| FinalTuningSettings {
