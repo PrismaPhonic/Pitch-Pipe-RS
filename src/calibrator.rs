@@ -1,6 +1,9 @@
 use num::pow::Pow;
 
-use crate::estimators::{SixtyHzThreeAxisNoiseEstimator, ThreeAxisMaxDistanceEstimator};
+use crate::{
+    estimators::{SixtyHzThreeAxisNoiseEstimator, ThreeAxisMaxDistanceEstimator},
+    tuner::Tuner,
+};
 
 #[derive(Default)]
 pub struct StartCalibration;
@@ -60,6 +63,10 @@ impl AmplitudeCalibrator {
             max_amplitude: self.amplitude_estimator.max_within_reason(),
             sample_rate: 60.0,
         }
+    }
+
+    pub fn tuner(self, least_precision: f64, worst_lag_secs: f64) -> Tuner {
+        Tuner::new(self.tuning_settings(least_precision, worst_lag_secs))
     }
 }
 
