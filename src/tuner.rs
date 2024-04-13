@@ -1,16 +1,15 @@
 use one_euro_rs::OneEuroFilter;
 
-use crate::{
-    calibrator::TuningSettings,
-    table::{B_DIM, FC_DIM, J_DIM, SIXTYHZ},
-};
+use crate::calibrator::TuningSettings;
+
+use crate::table::sixty_hz;
 
 pub struct Grid {
-    table: [[[f64; B_DIM]; FC_DIM]; J_DIM],
+    table: Vec<Vec<Vec<f64>>>,
 }
 
 impl Grid {
-    pub fn new(table: [[[f64; B_DIM]; FC_DIM]; J_DIM]) -> Self {
+    pub fn new(table: Vec<Vec<Vec<f64>>>) -> Self {
         Self { table }
     }
 
@@ -19,7 +18,7 @@ impl Grid {
     pub fn precision(&self, jitter: f64, cutoff_hz: f64, beta: f64) -> f64 {
         // Jitter level goes up in steps of 1/3 start at 1/3.
         let mut j_idx = 3.0 * jitter - 1.0;
-        j_idx = j_idx.min((J_DIM - 1) as f64);
+        j_idx = j_idx.min(15.0);
         let j_idx_lo = j_idx.floor();
         let j_idx_hi = j_idx.ceil();
 
@@ -102,10 +101,10 @@ impl Grid {
 }
 
 pub struct Tuner {
-    filter: OneEuroFilter<f64>,
-    settings: TuningSettings,
-    current_filtered_val: f64,
-    grid: Grid,
+    pub(crate) filter: OneEuroFilter<f64>,
+    pub(crate) settings: TuningSettings,
+    pub(crate) current_filtered_val: f64,
+    pub(crate) grid: Grid,
 }
 
 impl Tuner {
@@ -114,7 +113,7 @@ impl Tuner {
             filter: OneEuroFilter::new(60.0, 1.0, 1.0, 1.0),
             settings,
             current_filtered_val: 0.0,
-            grid: Grid::new(SIXTYHZ),
+            grid: Grid::new(sixty_hz()),
         }
     }
 
@@ -205,7 +204,30 @@ impl Tuner {
     }
 }
 
+#[derive(Debug)]
 pub struct FinalTuningSettings {
     pub min_cutoff_hz: f64,
     pub beta: f64,
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    pub fn test_tuning() {
+        let settings = TuningSettings {
+            max_target_precision: 1.0,
+            max_lag_secs: 0.08,
+            noise_variance: 2.5522531939863018e-9,
+            max_amplitude: 0.6117461919784546,
+            sample_rate: 60.0,
+        };
+
+        let mut tuner = Tuner::new(settings);
+
+        let final_settings = tuner.tune().unwrap();
+
+        print!("{:?}", final_settings);
+    }
 }

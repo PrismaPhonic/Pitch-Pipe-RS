@@ -5,6 +5,20 @@ use crate::{
     tuner::Tuner,
 };
 
+// The smallest target in our Fitt's law test.
+const MINIMUM_TARGET_SIZE: f64 = 14.0;
+
+// Results show approximately that if spatial jitter
+// is less than a quarter of the target size, the impact
+// on misses is negligible.
+fn least_precision() -> f64 {
+    (MINIMUM_TARGET_SIZE * 0.25).floor()
+}
+
+// Similarly, lag doesn't become much of a problem
+// until it reaches above 80ms.
+const MAX_LAG_SECONDS: f64 = 0.080;
+
 #[derive(Default)]
 pub struct StartCalibration;
 
@@ -70,10 +84,11 @@ impl AmplitudeCalibrator {
     }
 
     pub fn tuner_with_defaults(self) -> Tuner {
-        Tuner::new(self.tuning_settings(3.0, 0.08))
+        Tuner::new(self.tuning_settings(least_precision(), MAX_LAG_SECONDS))
     }
 }
 
+#[derive(Debug)]
 pub struct TuningSettings {
     pub max_target_precision: f64,
     pub max_lag_secs: f64,
