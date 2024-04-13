@@ -1,3 +1,7 @@
+![Maintenance](https://img.shields.io/badge/maintenance-activly--developed-brightgreen.svg)
+[![MIT licensed](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![Released API docs](https://docs.rs/pitch-pipe/badge.svg)](https://docs.rs/pitch-pipe)
+
 # Pitch Pipe
 
 This is a rust port of Pitch Pipe. The original researchers who invented Pitch
